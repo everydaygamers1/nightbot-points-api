@@ -5,23 +5,30 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 DB_FILE = "points_db.json"
-# Render automatically injects a dynamic configuration PORT environment variable
 PORT = int(os.environ.get("PORT", 8080))
 
 
 def load_db():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r") as f:
-            try:
-                return json.load(f)
-            except:
+    # Safely load database or return an empty dictionary if it doesn't exist yet
+    if not os.path.exists(DB_FILE):
+        return {}
+    try:
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            if not content:
                 return {}
-    return {}
+            return json.loads(content)
+    except Exception as e:
+        print(f"Error loading DB: {e}")
+        return {}
 
 
 def save_db(data):
-    with open(DB_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    try:
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Error saving DB: {e}")
 
 
 class PointsAPIHandler(BaseHTTPRequestHandler):
@@ -31,32 +38,39 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
         path = parsed_url.path
         query = parse_qs(parsed_url.query)
 
-        user = query.get("user", [""]).strip().lower()
-        touser = query.get("touser", [""]).strip().lower()
-        amount_str = query.get("amount", [""]).strip()
+        user = query.get("user", [""])
+        touser = query.get("touser", [""])
+        amount_str = query.get("amount", [""])
+
+        # Clean strings cleanly
+        user = user[0].strip().lower() if user else ""
+        touser = touser[0].strip().lower() if touser else ""
+        amount_str = amount_str[0].strip().lower() if amount_str else ""
 
         if not user:
-            self.send_response(400)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
+            self.wfile.write(b"Error: Missing user parameter.")
             return
 
         db = load_db()
         if user not in db:
-            db[user] = 100  # Starting points for new chatters
+            db[user] = 100  # Default starting balance
 
         response_msg = ""
 
-        # --- !points command logic ---
+        # --- !points command ---
         if path == "/points":
             target = touser if touser else user
             if target not in db:
                 db[target] = 100
             response_msg = f"@{target.capitalize()} has {db[target]} points!"
 
-        # --- !gamble command logic ---
+        # --- !gamble command ---
         elif path == "/gamble":
             balance = db[user]
-            if amount_str.lower() == "all":
+            if amount_str == "all":
                 bet = balance
             else:
                 try:
@@ -72,12 +86,14 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
                 response_msg = f"@{user.capitalize()}, you only have {balance} points! You can't bet {bet}."
             else:
                 roll = random.randint(1, 100)
-                if roll > 50:  # 50% Win Rate
+                if roll > 50:  # 50% chance to win
                     db[user] += bet
                     response_msg = f"🎲 @{user.capitalize()} rolled a {roll} and WON {bet} points! New balance: {db[user]} 🎉"
                 else:
                     db[user] -= bet
                     response_msg = f"📉 @{user.capitalize()} rolled a {roll} and LOST {bet} points. New balance: {db[user]} 💸"
+        else:
+            response_msg = "Invalid API endpoint."
 
         save_db(db)
 
@@ -88,7 +104,6 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    # Binding the web service interface container to handle incoming cloud network requests
     server = HTTPServer(("0.0.0.0", PORT), PointsAPIHandler)
     print(f"Server alive on port {PORT}...")
     server.serve_forever()
