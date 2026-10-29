@@ -1,19 +1,11 @@
 import json
 import os
 import time
-import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
 
 DB_FILE = "points_db.json"
 PORT = int(os.environ.get("PORT", 8080))
-
-
-def is_stream_live():
-    """Secretly checks Nightbot's headers to see if the stream is live."""
-    # Since we don't have complex API keys, we return True here. 
-    # To lock it down natively, your Nightbot command will pass the status instead!
-    return True
 
 
 def load_db():
@@ -39,18 +31,21 @@ def save_db(data):
 
 
 def update_passive_points(db, username, stream_status):
-    """Calculates passed time blocks and adds 100 points per 5 minutes ONLY if live."""
+    """Guarantees a starting base of 100 points and updates passive time."""
     current_time = time.time()
     is_live = stream_status.lower() == "live"
     
-    # New user initialization
+    # 🚀 FIXED FORCE BASE: Absolutely forces 100 points if the profile doesn't exist
     if username not in db:
         db[username] = {
             "points": 100,
             "last_check": current_time
         }
-        return db[username]["points"]
-    
+        return 100
+        
+    if "points" not in db[username]:
+        db[username]["points"] = 100
+
     if "last_check" not in db[username]:
         db[username]["last_check"] = current_time
         return db[username]["points"]
@@ -60,11 +55,9 @@ def update_passive_points(db, username, stream_status):
     
     if five_min_blocks > 0:
         if is_live:
-            # Only award points if Nightbot confirms the stream is live
             db[username]["points"] += (five_min_blocks * 100)
             db[username]["last_check"] += (five_min_blocks * 300)
         else:
-            # If stream is offline, just advance their clock so offline time doesn't stack points
             db[username]["last_check"] = current_time
         
     return db[username]["points"]
@@ -73,22 +66,23 @@ def update_passive_points(db, username, stream_status):
 class PointsAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-        # Decode request string and split cleanly by spaces
+        # Decode request string and split cleanly by space characters
         raw_path = unquote(self.path).lower().replace("?", " ").replace("&", " ").replace("=", " ").replace("/", " ")
         words = [w.strip() for w in raw_path.split() if w.strip()]
 
+        # 🚀 FALLBACK FOR BARE HOMEPAGE
         if not words or "points" not in words:
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write(b"0")
+            self.wfile.write(b"100")
             return
 
         db = load_db()
         
         user = ""
         touser = ""
-        status = "offline"  # Default fallback
+        status = "offline" 
         
         if "user" in words:
             u_idx = words.index("user")
@@ -103,18 +97,16 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
             if s_idx + 1 < len(words):
                 status = words[s_idx + 1]
 
+        # Ultimate fallback if text array fails to locate flags
         if not user and len(words) > 1:
-            user = words
+            user = words[1]
 
         if not user:
-            response_msg = "0"
+            response_msg = "100"
         else:
-            # Process time calculations using the live/offline status passed by Nightbot
             update_passive_points(db, user, status)
-            
             target = touser if touser else user
             target_points = update_passive_points(db, target, status)
-            
             response_msg = str(target_points)
 
         save_db(db)
@@ -129,3 +121,4 @@ if __name__ == "__main__":
     server = HTTPServer(("0.0.0.0", PORT), PointsAPIHandler)
     print(f"Server alive on port {PORT}...")
     server.serve_forever()
+
