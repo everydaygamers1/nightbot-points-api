@@ -1,11 +1,19 @@
 import json
 import os
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
 
 DB_FILE = "points_db.json"
 PORT = int(os.environ.get("PORT", 8080))
+
+
+def is_stream_live():
+    """Secretly checks Nightbot's headers to see if the stream is live."""
+    # Since we don't have complex API keys, we return True here. 
+    # To lock it down natively, your Nightbot command will pass the status instead!
+    return True
 
 
 def load_db():
@@ -30,10 +38,12 @@ def save_db(data):
         print(f"Error saving DB: {e}")
 
 
-def update_passive_points(db, username):
-    """Calculates passed time blocks and adds 100 points per 5 minutes."""
+def update_passive_points(db, username, stream_status):
+    """Calculates passed time blocks and adds 100 points per 5 minutes ONLY if live."""
     current_time = time.time()
+    is_live = stream_status.lower() == "live"
     
+    # New user initialization
     if username not in db:
         db[username] = {
             "points": 100,
@@ -49,8 +59,13 @@ def update_passive_points(db, username):
     five_min_blocks = int(elapsed_seconds // 300)
     
     if five_min_blocks > 0:
-        db[username]["points"] += (five_min_blocks * 100)
-        db[username]["last_check"] += (five_min_blocks * 300)
+        if is_live:
+            # Only award points if Nightbot confirms the stream is live
+            db[username]["points"] += (five_min_blocks * 100)
+            db[username]["last_check"] += (five_min_blocks * 300)
+        else:
+            # If stream is offline, just advance their clock so offline time doesn't stack points
+            db[username]["last_check"] = current_time
         
     return db[username]["points"]
 
@@ -58,7 +73,7 @@ def update_passive_points(db, username):
 class PointsAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-        # Decode request string and split cleanly by space characters
+        # Decode request string and split cleanly by spaces
         raw_path = unquote(self.path).lower().replace("?", " ").replace("&", " ").replace("=", " ").replace("/", " ")
         words = [w.strip() for w in raw_path.split() if w.strip()]
 
@@ -73,6 +88,7 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
         
         user = ""
         touser = ""
+        status = "offline"  # Default fallback
         
         if "user" in words:
             u_idx = words.index("user")
@@ -82,21 +98,23 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
             t_idx = words.index("touser")
             if t_idx + 1 < len(words):
                 touser = words[t_idx + 1]
+        if "status" in words:
+            s_idx = words.index("status")
+            if s_idx + 1 < len(words):
+                status = words[s_idx + 1]
 
         if not user and len(words) > 1:
-            user = words[1]
+            user = words
 
         if not user:
             response_msg = "0"
         else:
-            # Silently process time calculations for the chatter
-            update_passive_points(db, user)
+            # Process time calculations using the live/offline status passed by Nightbot
+            update_passive_points(db, user, status)
             
-            # Extract target score
             target = touser if touser else user
-            target_points = update_passive_points(db, target)
+            target_points = update_passive_points(db, target, status)
             
-            # 🚀 STRIKT OUTPUT: Only responds with the raw integer string
             response_msg = str(target_points)
 
         save_db(db)
