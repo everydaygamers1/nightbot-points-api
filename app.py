@@ -37,44 +37,52 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
         path = parsed_url.path
         query = parse_qs(parsed_url.query)
 
-        # 🚀 FIX: Fallback to secure automated Nightbot headers if parameters get broken by chat
-        user = self.headers.get("Nightbot-User", "")
-        if user and "name=" in user:
-            # Parse 'name=helix&displayName=Helix...' out of header
-            user = (
-                user.split("name=")[1].split("&")[0].strip().lower()
-            )  # Clean string format
-        else:
-            user = query.get("user", [""])[0].strip().lower()
+        # 🚀 UNIVERSAL PARSING: Grabs the username from parameters or secure headers safely
+        user = ""
+        nb_user_header = self.headers.get("Nightbot-User", "")
 
-        # Handle target and amount inputs cleanly
-        touser = query.get("touser", [""])[0].strip().lower()
-        amount_str = query.get("amount", [""])[0].strip().lower()
+        if nb_user_header and "name=" in nb_user_header:
+            try:
+                # Extracts username out of complex string safely
+                parts = nb_user_header.split("name=")
+                if len(parts) > 1:
+                    user = parts[1].split("&")[0].strip().lower()
+            except Exception:
+                pass
+
+        if not user:
+            # Fallback to standard parameter if headers aren't parsed
+            user_param = query.get("user", [""])
+            user = user_param[0].strip().lower() if user_param[0] else ""
+
+        # Handle optional variables safely
+        touser_param = query.get("touser", [""])
+        touser = touser_param[0].strip().lower() if touser_param[0] else ""
+
+        amount_param = query.get("amount", [""])
+        amount_str = amount_param[0].strip().lower() if amount_param[0] else ""
 
         if not user:
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write(
-                b"Error: Nightbot headers missing. Make sure to use $(urlfetch)."
-            )
+            self.wfile.write(b"Error: Missing username configuration.")
             return
 
         db = load_db()
         if user not in db:
-            db[user] = 100  # Default wallet balance
+            db[user] = 100
 
         response_msg = ""
 
-        # --- !points endpoint ---
-        if path == "/points":
+        # 🚀 FLEXIBLE PATHS: Matches whether the path has a trailing slash, queries, or headers
+        if "points" in path:
             target = touser if touser else user
             if target not in db:
                 db[target] = 100
             response_msg = f"@{target.capitalize()} has {db[target]} points!"
 
-        # --- !gamble endpoint ---
-        elif path == "/gamble":
+        elif "gamble" in path:
             balance = db[user]
             if amount_str == "all":
                 bet = balance
@@ -99,7 +107,7 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
                     db[user] -= bet
                     response_msg = f"📉 @{user.capitalize()} rolled a {roll} and LOST {bet} points. New balance: {db[user]} 💸"
         else:
-            response_msg = "Invalid API endpoint."
+            response_msg = "Database API is online. Endpoints: /points, /gamble"
 
         save_db(db)
 
