@@ -9,7 +9,6 @@ PORT = int(os.environ.get("PORT", 8080))
 
 
 def load_db():
-    # Safely load database or return an empty dictionary if it doesn't exist yet
     if not os.path.exists(DB_FILE):
         return {}
     try:
@@ -38,36 +37,43 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
         path = parsed_url.path
         query = parse_qs(parsed_url.query)
 
-        user = query.get("user", [""])
-        touser = query.get("touser", [""])
-        amount_str = query.get("amount", [""])
+        # 🚀 FIX: Fallback to secure automated Nightbot headers if parameters get broken by chat
+        user = self.headers.get("Nightbot-User", "")
+        if user and "name=" in user:
+            # Parse 'name=helix&displayName=Helix...' out of header
+            user = (
+                user.split("name=")[1].split("&")[0].strip().lower()
+            )  # Clean string format
+        else:
+            user = query.get("user", [""])[0].strip().lower()
 
-        # Clean strings cleanly
-        user = user[0].strip().lower() if user else ""
-        touser = touser[0].strip().lower() if touser else ""
-        amount_str = amount_str[0].strip().lower() if amount_str else ""
+        # Handle target and amount inputs cleanly
+        touser = query.get("touser", [""])[0].strip().lower()
+        amount_str = query.get("amount", [""])[0].strip().lower()
 
         if not user:
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write(b"Error: Missing user parameter.")
+            self.wfile.write(
+                b"Error: Nightbot headers missing. Make sure to use $(urlfetch)."
+            )
             return
 
         db = load_db()
         if user not in db:
-            db[user] = 100  # Default starting balance
+            db[user] = 100  # Default wallet balance
 
         response_msg = ""
 
-        # --- !points command ---
+        # --- !points endpoint ---
         if path == "/points":
             target = touser if touser else user
             if target not in db:
                 db[target] = 100
             response_msg = f"@{target.capitalize()} has {db[target]} points!"
 
-        # --- !gamble command ---
+        # --- !gamble endpoint ---
         elif path == "/gamble":
             balance = db[user]
             if amount_str == "all":
@@ -86,7 +92,7 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
                 response_msg = f"@{user.capitalize()}, you only have {balance} points! You can't bet {bet}."
             else:
                 roll = random.randint(1, 100)
-                if roll > 50:  # 50% chance to win
+                if roll > 50:
                     db[user] += bet
                     response_msg = f"🎲 @{user.capitalize()} rolled a {roll} and WON {bet} points! New balance: {db[user]} 🎉"
                 else:
