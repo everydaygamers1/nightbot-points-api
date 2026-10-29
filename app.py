@@ -2,7 +2,7 @@ import json
 import os
 import random
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import unquote
 
 DB_FILE = "points_db.json"
 PORT = int(os.environ.get("PORT", 8080))
@@ -33,60 +33,78 @@ def save_db(data):
 class PointsAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-        parsed_url = urlparse(self.path)
-        # Check both the path and query string parameters for total flexibility
-        full_path_str = self.path.lower()
-        query = parse_qs(parsed_url.query)
+        # 🚀 SMART READING: Decode the incoming web string and break it down by words instead of folders
+        raw_path = unquote(self.path).lower().replace("?", " ").replace("&", " ").replace("=", " ").replace("/", " ")
+        words = [w.strip() for w in raw_path.split() if w.strip()]
 
-        # Extract values safely from queries
-        user_param = query.get("user", [""])
-        user = user_param[0].strip().lower() if user_param[0] else ""
-
-        touser_param = query.get("touser", [""])
-        touser = touser_param[0].strip().lower() if touser_param[0] else ""
-
-        amount_param = query.get("amount", [""])
-        amount_str = amount_param[0].strip().lower() if amount_param[0] else ""
-
-        # Ultimate fallback parsing: if queries get mashed together by encoding bugs
-        if not user:
-            for key, val in query.items():
-                if "user" in key.lower() and val:
-                    user = val[0].strip().lower()
-                if "touser" in key.lower() and val:
-                    touser = val[0].strip().lower()
-                if "amount" in key.lower() and val:
-                    amount_str = val[0].strip().lower()
-
-        # If it's hitting the bare homepage without parameters, tell them it's online
-        if not user and "action" not in full_path_str:
+        # Fallback response if the URL is completely bare
+        if not words:
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write(b"Database API is online.")
+            self.wfile.write(b"Database API is online. Core endpoints active.")
             return
 
         db = load_db()
-        if user and user not in db:
-            db[user] = 100
-
         response_msg = ""
 
-        # --- 🚀 TRIGGER CHECK: Looks for keywords anywhere in the link string ---
-        if "points" in full_path_str or "action=points" in full_path_str:
-            target = touser if touser else user
-            if not target:
-                response_msg = "Error: User parameter missing."
+        # --- 🎮 SCENARIO A: CHATTER WANTS TO CHECK POINTS ---
+        if "points" in words:
+            # Safely locate usernames inside the word stream
+            user = ""
+            touser = ""
+            
+            if "user" in words:
+                u_idx = words.index("user")
+                if u_idx + 1 < len(words):
+                    user = words[u_idx + 1]
+            if "touser" in words:
+                t_idx = words.index("touser")
+                if t_idx + 1 < len(words):
+                    touser = words[t_idx + 1]
+
+            # Hard fallback if names didn't register cleanly
+            if not user and len(words) > 1:
+                user = words[1]
+
+            if not user:
+                response_msg = "Error parsing user profiles."
             else:
+                if user not in db:
+                    db[user] = 100  # Default starting balance
+                target = touser if touser else user
                 if target not in db:
                     db[target] = 100
                 response_msg = f"@{target.capitalize()} has {db[target]} points!"
 
-        elif "gamble" in full_path_str or "action=gamble" in full_path_str:
+        # --- 🎲 SCENARIO B: CHATTER WANTS TO GAMBLE ---
+        elif "gamble" in words:
+            user = ""
+            amount_str = ""
+
+            if "user" in words:
+                u_idx = words.index("user")
+                if u_idx + 1 < len(words):
+                    user = words[u_idx + 1]
+            if "amount" in words:
+                a_idx = words.index("amount")
+                if a_idx + 1 < len(words):
+                    amount_str = words[a_idx + 1]
+
+            if not user and len(words) > 1:
+                user = words[1]
+            if not amount_str and len(words) > 2:
+                amount_str = words[2]
+
             if not user:
-                response_msg = "Error: User parameter missing."
+                response_msg = "Error parsing user profile."
+            elif not amount_str:
+                response_msg = f"@{user.capitalize()}, enter a valid amount to gamble!"
             else:
+                if user not in db:
+                    db[user] = 100
                 balance = db[user]
+
                 if amount_str == "all":
                     bet = balance
                 else:
@@ -96,21 +114,19 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
                         bet = 0
 
                 if bet <= 0:
-                    response_msg = (
-                        f"@{user.capitalize()}, enter a valid amount to gamble!"
-                    )
+                    response_msg = f"@{user.capitalize()}, enter a valid amount to gamble!"
                 elif bet > balance:
                     response_msg = f"@{user.capitalize()}, you only have {balance} points! You can't bet {bet}."
                 else:
                     roll = random.randint(1, 100)
-                    if roll > 50:
+                    if roll > 50:  # 50% Win Rate
                         db[user] += bet
                         response_msg = f"🎲 @{user.capitalize()} rolled a {roll} and WON {bet} points! New balance: {db[user]} 🎉"
                     else:
                         db[user] -= bet
                         response_msg = f"📉 @{user.capitalize()} rolled a {roll} and LOST {bet} points. New balance: {db[user]} 💸"
         else:
-            response_msg = "Database API is online. Endpoints: points, gamble"
+            response_msg = "Database API is online."
 
         save_db(db)
 
