@@ -31,10 +31,9 @@ def save_db(data):
 
 
 def update_passive_points(db, username):
-    """Calculates passed time blocks and gives 100 points per 5 minutes."""
+    """Calculates passed time blocks and adds 100 points per 5 minutes."""
     current_time = time.time()
     
-    # New user initialization
     if username not in db:
         db[username] = {
             "points": 100,
@@ -46,7 +45,6 @@ def update_passive_points(db, username):
         db[username]["last_check"] = current_time
         return db[username]["points"]
 
-    # Calculate elapsed time blocks (300 seconds = 5 minutes)
     elapsed_seconds = current_time - db[username]["last_check"]
     five_min_blocks = int(elapsed_seconds // 300)
     
@@ -60,7 +58,7 @@ def update_passive_points(db, username):
 class PointsAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-        # Decode request string and split by word boundaries
+        # Decode request string and split cleanly by space characters
         raw_path = unquote(self.path).lower().replace("?", " ").replace("&", " ").replace("=", " ").replace("/", " ")
         words = [w.strip() for w in raw_path.split() if w.strip()]
 
@@ -68,12 +66,11 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write(b"Points Loyalty Tracker API is online.")
+            self.wfile.write(b"0")
             return
 
         db = load_db()
         
-        # Parse user names out of the URL string
         user = ""
         touser = ""
         
@@ -90,16 +87,17 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
             user = words[1]
 
         if not user:
-            response_msg = "Error parsing user profiles."
+            response_msg = "0"
         else:
-            # Update points for the chatter calling the command
+            # Silently process time calculations for the chatter
             update_passive_points(db, user)
             
-            # Check if they are looking up someone else or themselves
+            # Extract target score
             target = touser if touser else user
             target_points = update_passive_points(db, target)
             
-            response_msg = f"@{target.capitalize()} has {target_points} points!"
+            # 🚀 STRIKT OUTPUT: Only responds with the raw integer string
+            response_msg = str(target_points)
 
         save_db(db)
 
