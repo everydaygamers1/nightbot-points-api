@@ -1,6 +1,6 @@
 import json
 import os
-import random
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
 
@@ -30,103 +30,76 @@ def save_db(data):
         print(f"Error saving DB: {e}")
 
 
+def update_passive_points(db, username):
+    """Calculates passed time blocks and gives 100 points per 5 minutes."""
+    current_time = time.time()
+    
+    # New user initialization
+    if username not in db:
+        db[username] = {
+            "points": 100,
+            "last_check": current_time
+        }
+        return db[username]["points"]
+    
+    if "last_check" not in db[username]:
+        db[username]["last_check"] = current_time
+        return db[username]["points"]
+
+    # Calculate elapsed time blocks (300 seconds = 5 minutes)
+    elapsed_seconds = current_time - db[username]["last_check"]
+    five_min_blocks = int(elapsed_seconds // 300)
+    
+    if five_min_blocks > 0:
+        db[username]["points"] += (five_min_blocks * 100)
+        db[username]["last_check"] += (five_min_blocks * 300)
+        
+    return db[username]["points"]
+
+
 class PointsAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-        # 🚀 SMART READING: Decode the incoming web string and break it down by words instead of folders
+        # Decode request string and split by word boundaries
         raw_path = unquote(self.path).lower().replace("?", " ").replace("&", " ").replace("=", " ").replace("/", " ")
         words = [w.strip() for w in raw_path.split() if w.strip()]
 
-        # Fallback response if the URL is completely bare
-        if not words:
+        if not words or "points" not in words:
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write(b"Database API is online. Core endpoints active.")
+            self.wfile.write(b"Points Loyalty Tracker API is online.")
             return
 
         db = load_db()
-        response_msg = ""
+        
+        # Parse user names out of the URL string
+        user = ""
+        touser = ""
+        
+        if "user" in words:
+            u_idx = words.index("user")
+            if u_idx + 1 < len(words):
+                user = words[u_idx + 1]
+        if "touser" in words:
+            t_idx = words.index("touser")
+            if t_idx + 1 < len(words):
+                touser = words[t_idx + 1]
 
-        # --- 🎮 SCENARIO A: CHATTER WANTS TO CHECK POINTS ---
-        if "points" in words:
-            # Safely locate usernames inside the word stream
-            user = ""
-            touser = ""
-            
-            if "user" in words:
-                u_idx = words.index("user")
-                if u_idx + 1 < len(words):
-                    user = words[u_idx + 1]
-            if "touser" in words:
-                t_idx = words.index("touser")
-                if t_idx + 1 < len(words):
-                    touser = words[t_idx + 1]
+        if not user and len(words) > 1:
+            user = words[1]
 
-            # Hard fallback if names didn't register cleanly
-            if not user and len(words) > 1:
-                user = words[1]
-
-            if not user:
-                response_msg = "Error parsing user profiles."
-            else:
-                if user not in db:
-                    db[user] = 100  # Default starting balance
-                target = touser if touser else user
-                if target not in db:
-                    db[target] = 100
-                response_msg = f"@{target.capitalize()} has {db[target]} points!"
-
-        # --- 🎲 SCENARIO B: CHATTER WANTS TO GAMBLE ---
-        elif "gamble" in words:
-            user = ""
-            amount_str = ""
-
-            if "user" in words:
-                u_idx = words.index("user")
-                if u_idx + 1 < len(words):
-                    user = words[u_idx + 1]
-            if "amount" in words:
-                a_idx = words.index("amount")
-                if a_idx + 1 < len(words):
-                    amount_str = words[a_idx + 1]
-
-            if not user and len(words) > 1:
-                user = words[1]
-            if not amount_str and len(words) > 2:
-                amount_str = words[2]
-
-            if not user:
-                response_msg = "Error parsing user profile."
-            elif not amount_str:
-                response_msg = f"@{user.capitalize()}, enter a valid amount to gamble!"
-            else:
-                if user not in db:
-                    db[user] = 100
-                balance = db[user]
-
-                if amount_str == "all":
-                    bet = balance
-                else:
-                    try:
-                        bet = int(amount_str)
-                    except ValueError:
-                        bet = 0
-
-                if bet <= 0:
-                    response_msg = f"@{user.capitalize()}, enter a valid amount to gamble!"
-                elif bet > balance:
-                    response_msg = f"@{user.capitalize()}, you only have {balance} points! You can't bet {bet}."
-                else:
-                    roll = random.randint(1, 100)
-                    if roll > 50:  # 50% Win Rate
-                        db[user] += bet
-                        response_msg = f"🎲 @{user.capitalize()} rolled a {roll} and WON {bet} points! New balance: {db[user]} 🎉"
-                    else:
-                        db[user] -= bet
-                        response_msg = f"📉 @{user.capitalize()} rolled a {roll} and LOST {bet} points. New balance: {db[user]} 💸"
+        if not user:
+            response_msg = "Error parsing user profiles."
         else:
-            response_msg = "Database API is online."
+            # Update points for the chatter calling the command
+            update_passive_points(db, user)
+            
+            # Check if they are looking up someone else or themselves
+            target = touser if touser else user
+            target_points = update_passive_points(db, target)
+            
+            response_msg = f"@{target.capitalize()} has {target_points} points!"
 
         save_db(db)
 
