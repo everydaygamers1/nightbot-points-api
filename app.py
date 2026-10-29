@@ -33,40 +33,25 @@ def save_db(data):
 class PointsAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
+        # Convert full path string to lower case to check keywords anywhere in url
+        full_url_path = self.path.lower()
         parsed_url = urlparse(self.path)
-        path = parsed_url.path
         query = parse_qs(parsed_url.query)
 
-        # 🚀 UNIVERSAL PARSING: Grabs the username from parameters or secure headers safely
-        user = ""
-        nb_user_header = self.headers.get("Nightbot-User", "")
+        user_param = query.get("user", [""])
+        user = user_param[0].strip().lower() if user_param else ""
 
-        if nb_user_header and "name=" in nb_user_header:
-            try:
-                # Extracts username out of complex string safely
-                parts = nb_user_header.split("name=")
-                if len(parts) > 1:
-                    user = parts[1].split("&")[0].strip().lower()
-            except Exception:
-                pass
-
-        if not user:
-            # Fallback to standard parameter if headers aren't parsed
-            user_param = query.get("user", [""])
-            user = user_param[0].strip().lower() if user_param[0] else ""
-
-        # Handle optional variables safely
         touser_param = query.get("touser", [""])
-        touser = touser_param[0].strip().lower() if touser_param[0] else ""
+        touser = touser_param[0].strip().lower() if touser_param else ""
 
         amount_param = query.get("amount", [""])
-        amount_str = amount_param[0].strip().lower() if amount_param[0] else ""
+        amount_str = amount_param[0].strip().lower() if amount_param else ""
 
         if not user:
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write(b"Error: Missing username configuration.")
+            self.wfile.write(b"Error: Username missing. Use !points or !gamble.")
             return
 
         db = load_db()
@@ -75,14 +60,14 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
 
         response_msg = ""
 
-        # 🚀 FLEXIBLE PATHS: Matches whether the path has a trailing slash, queries, or headers
-        if "points" in path:
+        # 🚀 SCAN ENTIRE STRING: Works even if parameters get swapped or formatting shifts
+        if "points" in full_url_path:
             target = touser if touser else user
             if target not in db:
                 db[target] = 100
             response_msg = f"@{target.capitalize()} has {db[target]} points!"
 
-        elif "gamble" in path:
+        elif "gamble" in full_url_path:
             balance = db[user]
             if amount_str == "all":
                 bet = balance
@@ -107,7 +92,7 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
                     db[user] -= bet
                     response_msg = f"📉 @{user.capitalize()} rolled a {roll} and LOST {bet} points. New balance: {db[user]} 💸"
         else:
-            response_msg = "Database API is online. Endpoints: /points, /gamble"
+            response_msg = "Database API is online. Endpoints: points, gamble"
 
         save_db(db)
 
