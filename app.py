@@ -2,7 +2,7 @@ import json
 import os
 import random
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import unquote
+from urllib.parse import parse_qs, urlparse
 
 DB_FILE = "points_db.json"
 PORT = int(os.environ.get("PORT", 8080))
@@ -33,51 +33,60 @@ def save_db(data):
 class PointsAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-        # Decode and split the path parts cleanly by slashes
-        raw_path = unquote(self.path).strip("/")
-        parts = [p.lower().strip() for p in raw_path.split("/") if p.strip()]
+        parsed_url = urlparse(self.path)
+        # Check both the path and query string parameters for total flexibility
+        full_path_str = self.path.lower()
+        query = parse_qs(parsed_url.query)
 
-        # Fallback if someone hits the main homepage domain directly
-        if not parts:
+        # Extract values safely from queries
+        user_param = query.get("user", [""])
+        user = user_param[0].strip().lower() if user_param[0] else ""
+
+        touser_param = query.get("touser", [""])
+        touser = touser_param[0].strip().lower() if touser_param[0] else ""
+
+        amount_param = query.get("amount", [""])
+        amount_str = amount_param[0].strip().lower() if amount_param[0] else ""
+
+        # Ultimate fallback parsing: if queries get mashed together by encoding bugs
+        if not user:
+            for key, val in query.items():
+                if "user" in key.lower() and val:
+                    user = val[0].strip().lower()
+                if "touser" in key.lower() and val:
+                    touser = val[0].strip().lower()
+                if "amount" in key.lower() and val:
+                    amount_str = val[0].strip().lower()
+
+        # If it's hitting the bare homepage without parameters, tell them it's online
+        if not user and "action" not in full_path_str:
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
             self.wfile.write(b"Database API is online.")
             return
 
-        command = parts[0]  # will be 'points' or 'gamble'
         db = load_db()
+        if user and user not in db:
+            db[user] = 100
+
         response_msg = ""
 
-        # --- 🚀 FLAT PATH 1: /points/username/target ---
-        if "points" in command:
-            user = parts[1] if len(parts) > 1 else ""
-            touser = parts[2] if len(parts) > 2 else ""
-
-            if not user:
-                response_msg = "Error: Missing username."
+        # --- 🚀 TRIGGER CHECK: Looks for keywords anywhere in the link string ---
+        if "points" in full_path_str or "action=points" in full_path_str:
+            target = touser if touser else user
+            if not target:
+                response_msg = "Error: User parameter missing."
             else:
-                if user not in db:
-                    db[user] = 100
-                target = touser if touser else user
                 if target not in db:
                     db[target] = 100
                 response_msg = f"@{target.capitalize()} has {db[target]} points!"
 
-        # --- 🚀 FLAT PATH 2: /gamble/username/betamount ---
-        elif "gamble" in command:
-            user = parts[1] if len(parts) > 1 else ""
-            amount_str = parts[2] if len(parts) > 2 else ""
-
+        elif "gamble" in full_path_str or "action=gamble" in full_path_str:
             if not user:
-                response_msg = "Error: Missing username."
-            elif not amount_str:
-                response_msg = f"@{user.capitalize()}, enter a valid amount to gamble!"
+                response_msg = "Error: User parameter missing."
             else:
-                if user not in db:
-                    db[user] = 100
                 balance = db[user]
-
                 if amount_str == "all":
                     bet = balance
                 else:
@@ -87,7 +96,9 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
                         bet = 0
 
                 if bet <= 0:
-                    response_msg = f"@{user.capitalize()}, enter a valid amount to gamble!"
+                    response_msg = (
+                        f"@{user.capitalize()}, enter a valid amount to gamble!"
+                    )
                 elif bet > balance:
                     response_msg = f"@{user.capitalize()}, you only have {balance} points! You can't bet {bet}."
                 else:
@@ -99,7 +110,7 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
                         db[user] -= bet
                         response_msg = f"📉 @{user.capitalize()} rolled a {roll} and LOST {bet} points. New balance: {db[user]} 💸"
         else:
-            response_msg = "Invalid endpoint structure."
+            response_msg = "Database API is online. Endpoints: points, gamble"
 
         save_db(db)
 
@@ -113,4 +124,3 @@ if __name__ == "__main__":
     server = HTTPServer(("0.0.0.0", PORT), PointsAPIHandler)
     print(f"Server alive on port {PORT}...")
     server.serve_forever()
-
