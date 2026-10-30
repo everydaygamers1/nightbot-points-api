@@ -3,7 +3,7 @@ import os
 import random
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import unquote
+from urllib.parse import parse_qs, urlparse
 
 DB_FILE = "points_db.json"
 PORT = int(os.environ.get("PORT", 8080))
@@ -35,7 +35,6 @@ def update_passive_points(db, username, is_live):
     """Guarantees a base of 100 points and updates passive watch time if live."""
     current_time = time.time()
     
-    # Core user initialization
     if username not in db:
         db[username] = {
             "points": 100,
@@ -51,16 +50,13 @@ def update_passive_points(db, username, is_live):
         return db[username]["points"]
 
     elapsed_seconds = current_time - db[username]["last_check"]
-    # 300 seconds = 5 minutes
     five_min_blocks = int(elapsed_seconds // 300)
     
     if five_min_blocks > 0:
         if is_live:
-            # 🚀 Award 100 points per 5-minute block
             db[username]["points"] += (five_min_blocks * 100)
             db[username]["last_check"] += (five_min_blocks * 300)
         else:
-            # Keep advancing their clock timestamp when offline so it cannot stack
             db[username]["last_check"] = current_time
         
     return db[username]["points"]
@@ -69,57 +65,53 @@ def update_passive_points(db, username, is_live):
 class PointsAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-        # 🚀 ROBUST PARSING: Read raw URL and split it cleanly by keywords
-        raw_path = unquote(self.path).lower()
-        
-        # Check explicitly if the status string contains "live" anywhere in the URL text
+        # 🚀 STEP 1: Scan the incoming string to see if the stream is live
+        raw_path = self.path.lower()
         is_live = "live" in raw_path
 
-        # Clean words split
-        clean_url = raw_path.replace("?", " ").replace("&", " ").replace("=", " ").replace("/", " ")
-        words = [w.strip() for w in clean_url.split() if w.strip()]
+        # 🚀 STEP 2: Pull the exact username straight out of Nightbot's native headers
+        nb_user_header = self.headers.get("Nightbot-User", "")
+        user = ""
+        
+        if nb_user_header:
+            try:
+                # Nightbot headers look like: name=chattername&displayName=ChatterName...
+                for param in nb_user_header.split("&"):
+                    if param.startswith("name="):
+                        user = param.split("=")[1].strip().lower()
+                        break
+            except Exception:
+                pass
 
-        if not words or "points" not in words:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(b"100")
-            return
+        # Fallback if headers fail (like hitting it directly via browser)
+        if not user:
+            parsed_url = urlparse(self.path)
+            query = parse_qs(parsed_url.query)
+            user_param = query.get("user", [""])
+            user = user_param[0].strip().lower() if user_param[0] else "guest"
 
         db = load_db()
         
-        user = ""
-        touser = ""
+        # Check if they are looking up someone else via standard query string
+        parsed_url = urlparse(self.path)
+        query = parse_qs(parsed_url.query)
+        touser_param = query.get("touser", [""])
+        touser = touser_param[0].strip().lower() if touser_param and touser_param[0] else ""
+
+        # Silently process time blocks for the caller
+        update_passive_points(db, user, is_live)
         
-        if "user" in words:
-            u_idx = words.index("user")
-            if u_idx + 1 < len(words):
-                user = words[u_idx + 1]
-        if "touser" in words:
-            t_idx = words.index("touser")
-            if t_idx + 1 < len(words):
-                touser = words[t_idx + 1]
-
-        if not user and len(words) > 1:
-            user = words[1]
-
-        if not user:
-            response_msg = "100"
-        else:
-            # Silently process time blocks for the chatter calling the command
-            update_passive_points(db, user, is_live)
-            
-            # Determine target score outputs
-            target = touser if touser else user
-            target_points = update_passive_points(db, target, is_live)
-            response_msg = str(target_points)
-
+        # Calculate final points output
+        target = touser if touser else user
+        target_points = update_passive_points(db, target, is_live)
+        
         save_db(db)
 
+        # 🚀 STEP 3: Return ONLY the integer score string
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
-        self.wfile.write(response_msg.encode("utf-8"))
+        self.wfile.write(str(target_points).encode("utf-8"))
 
 
 if __name__ == "__main__":
