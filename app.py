@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
@@ -30,12 +31,11 @@ def save_db(data):
         print(f"Error saving DB: {e}")
 
 
-def update_passive_points(db, username, stream_status):
-    """Guarantees a starting base of 100 points and updates passive time."""
+def update_passive_points(db, username, is_live):
+    """Guarantees a base of 100 points and updates passive watch time if live."""
     current_time = time.time()
-    is_live = stream_status.lower() == "live"
     
-    # 🚀 FIXED FORCE BASE: Absolutely forces 100 points if the profile doesn't exist
+    # Core user initialization
     if username not in db:
         db[username] = {
             "points": 100,
@@ -51,13 +51,16 @@ def update_passive_points(db, username, stream_status):
         return db[username]["points"]
 
     elapsed_seconds = current_time - db[username]["last_check"]
+    # 300 seconds = 5 minutes
     five_min_blocks = int(elapsed_seconds // 300)
     
     if five_min_blocks > 0:
         if is_live:
+            # 🚀 Award 100 points per 5-minute block
             db[username]["points"] += (five_min_blocks * 100)
             db[username]["last_check"] += (five_min_blocks * 300)
         else:
+            # Keep advancing their clock timestamp when offline so it cannot stack
             db[username]["last_check"] = current_time
         
     return db[username]["points"]
@@ -66,11 +69,16 @@ def update_passive_points(db, username, stream_status):
 class PointsAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-        # Decode request string and split cleanly by space characters
-        raw_path = unquote(self.path).lower().replace("?", " ").replace("&", " ").replace("=", " ").replace("/", " ")
-        words = [w.strip() for w in raw_path.split() if w.strip()]
+        # 🚀 ROBUST PARSING: Read raw URL and split it cleanly by keywords
+        raw_path = unquote(self.path).lower()
+        
+        # Check explicitly if the status string contains "live" anywhere in the URL text
+        is_live = "live" in raw_path
 
-        # 🚀 FALLBACK FOR BARE HOMEPAGE
+        # Clean words split
+        clean_url = raw_path.replace("?", " ").replace("&", " ").replace("=", " ").replace("/", " ")
+        words = [w.strip() for w in clean_url.split() if w.strip()]
+
         if not words or "points" not in words:
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -82,7 +90,6 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
         
         user = ""
         touser = ""
-        status = "offline" 
         
         if "user" in words:
             u_idx = words.index("user")
@@ -92,21 +99,19 @@ class PointsAPIHandler(BaseHTTPRequestHandler):
             t_idx = words.index("touser")
             if t_idx + 1 < len(words):
                 touser = words[t_idx + 1]
-        if "status" in words:
-            s_idx = words.index("status")
-            if s_idx + 1 < len(words):
-                status = words[s_idx + 1]
 
-        # Ultimate fallback if text array fails to locate flags
         if not user and len(words) > 1:
             user = words[1]
 
         if not user:
             response_msg = "100"
         else:
-            update_passive_points(db, user, status)
+            # Silently process time blocks for the chatter calling the command
+            update_passive_points(db, user, is_live)
+            
+            # Determine target score outputs
             target = touser if touser else user
-            target_points = update_passive_points(db, target, status)
+            target_points = update_passive_points(db, target, is_live)
             response_msg = str(target_points)
 
         save_db(db)
@@ -121,4 +126,3 @@ if __name__ == "__main__":
     server = HTTPServer(("0.0.0.0", PORT), PointsAPIHandler)
     print(f"Server alive on port {PORT}...")
     server.serve_forever()
-
